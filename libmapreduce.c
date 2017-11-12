@@ -21,10 +21,9 @@ static const int BUFFER_SIZE = 2048;
 
 static void process_key_value(const char *key, const char *value, mapreduce_t *mr)
 {
-//    printf("process_key_value,key:%s,value:%s\n",key,value);
     if (dictionary_add(&mr->dict,key,value) == KEY_EXISTS) {
         const char *oldValue = dictionary_get(&mr->dict,key);
-        const char *newValue = reduce(oldValue,value);
+        const char *newValue = mr->reducefunc(oldValue,value);
         dictionary_remove(&mr->dict,key);
         dictionary_add(&mr->dict,key,newValue);
     }
@@ -33,7 +32,6 @@ static void process_key_value(const char *key, const char *value, mapreduce_t *m
 
 static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 {
-    printf("read_from_fd\n");
 	/* Find the end of the string. */
 	int offset = strlen(buffer);
 
@@ -77,7 +75,6 @@ static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 		memmove(buffer, line + 1, BUFFER_SIZE - ((line + 1) - buffer));
 		buffer[BUFFER_SIZE - ((line + 1) - buffer)] = '\0';
 	}
-
 	return 1;
 }
 
@@ -97,7 +94,7 @@ typedef struct {
 } worker_func_args;
 
 void worker_func(void *arg) {
-    int *fds,fds_num,res,i,read_count;
+    int *fds,fds_num,res,i,max_fds,read_count;
     mapreduce_t *mr;
     worker_func_args *args;
     fd_set read_set;
@@ -120,7 +117,7 @@ void worker_func(void *arg) {
 
     FD_ZERO(&read_set);
     read_count = 0;
-
+    max_fds = fds[(fds_num)*2-1] + 1;
     while(read_count != fds_num) {
         for(i = 0;i < fds_num;i++)
             if (FD_ISSET(fds[2*i],&read_set)) {
@@ -128,10 +125,10 @@ void worker_func(void *arg) {
                 buf[0] = '\0';
                 read_count++;
             } else {
-                FD_SET(fds[i],&read_set);
+                FD_SET(fds[2*i],&read_set);
             }
 
-        res = select(fds[fds_num-1] + 1,&read_set,NULL,NULL,&tv);
+        res = select(max_fds,&read_set,NULL,NULL,&tv);
         if (res == -1) {
             perror("select");
             exit(-1);
@@ -140,6 +137,7 @@ void worker_func(void *arg) {
     free(buf);
     free(fds);
     free(args);
+    pthread_exit(NULL);
 }
 
 void mapreduce_map_all(mapreduce_t *mr, const char **values)
@@ -168,8 +166,7 @@ void mapreduce_map_all(mapreduce_t *mr, const char **values)
         res = fork();
         if (res == -1) { perror("fork"); exit(-2); }
         else if (res == 0) {
-            //chlid 
-            printf("chlid\n");
+            //child
             mr->mapfunc(fds[2*i+1],values[i]);
             exit(0);
         }
