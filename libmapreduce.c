@@ -21,11 +21,19 @@ static const int BUFFER_SIZE = 2048;
 
 static void process_key_value(const char *key, const char *value, mapreduce_t *mr)
 {
+//    printf("process_key_value,key:%s,value:%s\n",key,value);
+    if (dictionary_add(&mr->dict,key,value) == KEY_EXISTS) {
+        const char *oldValue = dictionary_get(&mr->dict,key);
+        const char *newValue = reduce(oldValue,value);
+        dictionary_remove(&mr->dict,key);
+        dictionary_add(&mr->dict,key,newValue);
+    }
 }
 
 
 static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 {
+    printf("read_from_fd\n");
 	/* Find the end of the string. */
 	int offset = strlen(buffer);
 
@@ -77,22 +85,122 @@ void mapreduce_init(mapreduce_t *mr,
 			void (*mymap)(int, const char *), 
 				const char *(*myreduce)(const char *, const char *))
 {	
+    mr->mapfunc = mymap;
+    mr->reducefunc = myreduce;
+    dictionary_init(&mr->dict);
+}
+
+typedef struct {
+    int *fds;
+    int fds_num;
+    mapreduce_t *mr;
+} worker_func_args;
+
+void worker_func(void *arg) {
+    int *fds,fds_num,res,i,read_count;
+    mapreduce_t *mr;
+    worker_func_args *args;
+    fd_set read_set;
+    char *buf;
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+
+    //unpack args
+    args = (worker_func_args*)arg;
+    fds = args->fds;
+    fds_num = args->fds_num;
+    mr = args->mr;
+    //prepare the buf and read_set
+    buf = (char*)malloc(sizeof(char)*(BUFFER_SIZE+1));
+    if (buf == NULL) {
+        perror("malloc");
+        exit(-1);
+    }
+
+    FD_ZERO(&read_set);
+    read_count = 0;
+
+    while(read_count != fds_num) {
+        for(i = 0;i < fds_num;i++)
+            if (FD_ISSET(fds[2*i],&read_set)) {
+                read_from_fd(fds[2*i],buf,mr);
+                buf[0] = '\0';
+                read_count++;
+            } else {
+                FD_SET(fds[i],&read_set);
+            }
+
+        res = select(fds[fds_num-1] + 1,&read_set,NULL,NULL,&tv);
+        if (res == -1) {
+            perror("select");
+            exit(-1);
+        }
+    }
+    free(buf);
+    free(fds);
+    free(args);
 }
 
 void mapreduce_map_all(mapreduce_t *mr, const char **values)
 {
+    int value_num = 0,res,i;
+    int *fds;
+    worker_func_args *args;
+    //get value count
+    while(values[value_num] != NULL) value_num++;
+    
+    //new fds and pipe
+    //read port fds[2*i], write port fds[2*i+1]
+    fds = (int*)malloc(sizeof(int)*value_num*2);
+    if (fds == NULL) {
+        perror("malloc");
+        exit(-1);
+    }
+    for(i = 0;i < value_num;i++)
+        if (pipe(&fds[2*i]) == -1) {
+            perror("pipe");
+            exit(-1);
+        }
+    
+    //fork and map
+    for(i = 0;i < value_num;i++) {
+        res = fork();
+        if (res == -1) { perror("fork"); exit(-2); }
+        else if (res == 0) {
+            //chlid 
+            printf("chlid\n");
+            mr->mapfunc(fds[2*i+1],values[i]);
+            exit(0);
+        }
+    }
+
+    //construct the args
+    args = (worker_func_args*)malloc(sizeof(worker_func_args));
+    if (args == NULL) {
+        perror("malloc");
+        exit(-1);
+    }
+    args->fds = fds;
+    args->fds_num = value_num;
+    args->mr = mr;
+
+    //new pthread
+    res = pthread_create(&mr->worker,NULL,(void *)worker_func,(void*)args);
 }
 
 void mapreduce_reduce_all(mapreduce_t *mr)
 {
+    pthread_join(mr->worker,NULL);
 }
 
 const char *mapreduce_get_value(mapreduce_t *mr, const char *result_key)
 {
-	return NULL;
+	return dictionary_get(&mr->dict,result_key);
 }
 
 void mapreduce_destroy(mapreduce_t *mr)
 {
+
 }
 

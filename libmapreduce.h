@@ -11,8 +11,15 @@
 #include <pthread.h>
 #include "libdictionary.h"
 
+typedef void(*MapFunc)(int ,const char *);
+typedef const char* (*ReduceFunc)(const char*,const char*);
+
 typedef struct _mapreduce_t
 {
+    MapFunc mapfunc;
+    ReduceFunc reducefunc;
+    dictionary_t dict;
+    pthread_t worker;
 } mapreduce_t;
 
 /**
