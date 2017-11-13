@@ -21,6 +21,7 @@ static const int BUFFER_SIZE = 2048;
 
 static void process_key_value(const char *key, const char *value, mapreduce_t *mr)
 {
+    printf("key:%s value:%s\n",key,value);
     if (dictionary_add(&mr->dict,key,value) == KEY_EXISTS) {
         const char *oldValue = dictionary_get(&mr->dict,key);
         const char *newValue = mr->reducefunc(oldValue,value);
@@ -32,6 +33,7 @@ static void process_key_value(const char *key, const char *value, mapreduce_t *m
 
 static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 {
+    printf("read_from_fd");
 	/* Find the end of the string. */
 	int offset = strlen(buffer);
 
@@ -94,14 +96,11 @@ typedef struct {
 } worker_func_args;
 
 void worker_func(void *arg) {
-    int *fds,fds_num,res,i,max_fds,read_count;
+    int *fds,fds_num,res,i,max_fds,read_count,t;
     mapreduce_t *mr;
     worker_func_args *args;
-    fd_set read_set;
     char *buf;
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 0;
+    struct pollfd *my_pfds;
 
     //unpack args
     args = (worker_func_args*)arg;
@@ -114,18 +113,48 @@ void worker_func(void *arg) {
         perror("malloc");
         exit(-1);
     }
-
-    FD_ZERO(&read_set);
-    read_count = 0;
-    max_fds = fds[(fds_num)*2-1] + 1;
-    while(read_count != fds_num) {
-        for(i = 0;i < fds_num;i++)
-            if (FD_ISSET(fds[2*i],&read_set)) {
-                read_from_fd(fds[2*i],buf,mr);
+    
+    //prepare pollfd
+    my_pfds = (struct pollfd*)malloc(sizeof(struct pollfd)*fds_num);
+    read_count = 0; 
+    while(fds_num != read_count) {
+        for (i = 0;i < fds_num;i++) {
+            my_pfds[i].events = POLLIN | POLLHUP;
+        }
+ 
+        if (poll(my_pfds,fds_num,-1) != 1) {
+            perror("poll");
+            exit(0);
+        }
+        for(i =0;i < fds_num;i++) {
+            if (my_pfds[i].revents & POLLIN) {
+                read_from_fd(fds[i],buf,mr);
                 buf[0] = '\0';
+            }
+            if (my_pfds[i].revents & POLLHUP) {
+                printf("read_count:%d\n",read_count);
                 read_count++;
+            }
+        }
+    }
+
+    /*max_fds = fds[fds_num-1] + 1;
+    printf("fds_num:%d\n",fds_num);
+    while(fds_num != 0) {
+        for(i = 0;i < fds_num;i++)
+            if (FD_ISSET(fds[i],&read_set)) {
+                //printf("%d is set\n",fds[i]);
+                
+                if ( read_from_fd(fds[i],buf,mr) == 0) {
+
+                    t = fds[--fds_num];
+                    fds[fds_num] = fds[i];
+                    fds[i] = t;
+                    i--;
+                }
+                buf[0] = '\0';
             } else {
-                FD_SET(fds[2*i],&read_set);
+                FD_SET(fds[i],&read_set);
             }
 
         res = select(max_fds,&read_set,NULL,NULL,&tv);
@@ -134,6 +163,7 @@ void worker_func(void *arg) {
             exit(-1);
         }
     }
+    */
     free(buf);
     free(fds);
     free(args);
@@ -144,31 +174,34 @@ void mapreduce_map_all(mapreduce_t *mr, const char **values)
 {
     int value_num = 0,res,i;
     int *fds;
+    int fd[2];
     worker_func_args *args;
     //get value count
     while(values[value_num] != NULL) value_num++;
     
-    //new fds and pipe
-    //read port fds[2*i], write port fds[2*i+1]
-    fds = (int*)malloc(sizeof(int)*value_num*2);
+    //new fds
+    fds = (int*)malloc(sizeof(int)*value_num);
     if (fds == NULL) {
         perror("malloc");
         exit(-1);
     }
-    for(i = 0;i < value_num;i++)
-        if (pipe(&fds[2*i]) == -1) {
+
+    //fork and map
+    for(i = 0;i < value_num;i++) {
+        if (pipe(fd) == -1) {
             perror("pipe");
             exit(-1);
         }
-    
-    //fork and map
-    for(i = 0;i < value_num;i++) {
         res = fork();
         if (res == -1) { perror("fork"); exit(-2); }
         else if (res == 0) {
             //child
-            mr->mapfunc(fds[2*i+1],values[i]);
+            close(fd[0]);
+            mr->mapfunc(fd[1],values[i]);
             exit(0);
+        } else {
+            close(fd[1]);
+            fds[i] = fd[0];
         }
     }
 
