@@ -63,8 +63,13 @@ void map(int fd, const char *data)
  */
 const char *reduce(const char *value1, const char *value2)
 {
-    if (sizeof(value1) > sizeof(value2)) return value1;
-    else return value2;
+    char *newValue;
+    if (sizeof(value1) > sizeof(value2)) {
+        asprintf(&newValue,"%s",value1);
+    } else {
+        asprintf(&newValue,"%s",value2);
+    }
+    return newValue;
 }
 
 

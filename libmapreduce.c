@@ -26,6 +26,7 @@ static void process_key_value(const char *key, const char *value, mapreduce_t *m
         const char *newValue = mr->reducefunc(oldValue,value);
         dictionary_remove_free(&mr->dict,key);
         dictionary_add(&mr->dict,key,newValue);
+        free(value);
     }
 }
 
@@ -74,7 +75,6 @@ static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 		/* Shift the contents of the buffer to remove the space used by the processed line. */
 		memmove(buffer, line + 1, BUFFER_SIZE - ((line + 1) - buffer));
 		buffer[BUFFER_SIZE - ((line + 1) - buffer)] = '\0';
-        
 	}
 	return 1;
 }
