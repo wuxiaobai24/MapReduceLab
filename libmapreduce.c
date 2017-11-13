@@ -24,7 +24,7 @@ static void process_key_value(const char *key, const char *value, mapreduce_t *m
     if (dictionary_add(&mr->dict,key,value) == KEY_EXISTS) {
         const char *oldValue = dictionary_get(&mr->dict,key);
         const char *newValue = mr->reducefunc(oldValue,value);
-        dictionary_remove(&mr->dict,key);
+        dictionary_remove_free(&mr->dict,key);
         dictionary_add(&mr->dict,key,newValue);
     }
 }
@@ -74,6 +74,7 @@ static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 		/* Shift the contents of the buffer to remove the space used by the processed line. */
 		memmove(buffer, line + 1, BUFFER_SIZE - ((line + 1) - buffer));
 		buffer[BUFFER_SIZE - ((line + 1) - buffer)] = '\0';
+        
 	}
 	return 1;
 }
@@ -94,7 +95,7 @@ typedef struct {
 } worker_func_args;
 
 void worker_func(void *arg) {
-    int *fds,fds_num,res,i,max_fds,read_num,t;
+    int *fds,fds_num,i,read_num;
     mapreduce_t *mr;
     worker_func_args *args;
     char **buf;
@@ -216,6 +217,6 @@ const char *mapreduce_get_value(mapreduce_t *mr, const char *result_key)
 
 void mapreduce_destroy(mapreduce_t *mr)
 {
-
+    dictionary_destroy_free(&mr->dict);
 }
 
