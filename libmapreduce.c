@@ -21,7 +21,6 @@ static const int BUFFER_SIZE = 2048;
 
 static void process_key_value(const char *key, const char *value, mapreduce_t *mr)
 {
-    printf("key:%s value:%s\n",key,value);
     if (dictionary_add(&mr->dict,key,value) == KEY_EXISTS) {
         const char *oldValue = dictionary_get(&mr->dict,key);
         const char *newValue = mr->reducefunc(oldValue,value);
@@ -33,7 +32,6 @@ static void process_key_value(const char *key, const char *value, mapreduce_t *m
 
 static int read_from_fd(int fd, char *buffer, mapreduce_t *mr)
 {
-    printf("read_from_fd");
 	/* Find the end of the string. */
 	int offset = strlen(buffer);
 
@@ -96,10 +94,10 @@ typedef struct {
 } worker_func_args;
 
 void worker_func(void *arg) {
-    int *fds,fds_num,res,i,max_fds,read_count,t;
+    int *fds,fds_num,res,i,max_fds,read_num,t;
     mapreduce_t *mr;
     worker_func_args *args;
-    char *buf;
+    char **buf;
     struct pollfd *my_pfds;
 
     //unpack args
@@ -108,63 +106,50 @@ void worker_func(void *arg) {
     fds_num = args->fds_num;
     mr = args->mr;
     //prepare the buf and read_set
-    buf = (char*)malloc(sizeof(char)*(BUFFER_SIZE+1));
+    buf = (char**)malloc(sizeof(char*)*(fds_num));
     if (buf == NULL) {
         perror("malloc");
         exit(-1);
     }
+    for(i = 0;i < fds_num;i++) {
+        buf[i] = (char*)malloc(sizeof(char)*(BUFFER_SIZE+1));
+        if (buf[i] == NULL) {
+            perror("malloc");
+            exit(-1);
+        }
+        buf[i][0] = '\0';
+    }
     
     //prepare pollfd
     my_pfds = (struct pollfd*)malloc(sizeof(struct pollfd)*fds_num);
-    read_count = 0; 
-    while(fds_num != read_count) {
-        for (i = 0;i < fds_num;i++) {
-            my_pfds[i].events = POLLIN | POLLHUP;
-        }
+    for (i = 0;i < fds_num;i++) {
+        my_pfds[i].fd = fds[i];
+        my_pfds[i].events = POLLIN;
+    }
  
-        if (poll(my_pfds,fds_num,-1) != 1) {
+    read_num = fds_num;
+    while(read_num != 0) {
+        if (poll(my_pfds,read_num,-1) == -1) {
             perror("poll");
             exit(0);
         }
-        for(i =0;i < fds_num;i++) {
+
+        for(i =0;i < read_num;i++) {
             if (my_pfds[i].revents & POLLIN) {
-                read_from_fd(fds[i],buf,mr);
-                buf[0] = '\0';
+                while( read_from_fd(my_pfds[i].fd,buf[i],mr) )
+                    /*do nothing*/;
             }
             if (my_pfds[i].revents & POLLHUP) {
-                printf("read_count:%d\n",read_count);
-                read_count++;
+                my_pfds[i] = my_pfds[--read_num];
+                i--;
             }
         }
     }
-
-    /*max_fds = fds[fds_num-1] + 1;
-    printf("fds_num:%d\n",fds_num);
-    while(fds_num != 0) {
-        for(i = 0;i < fds_num;i++)
-            if (FD_ISSET(fds[i],&read_set)) {
-                //printf("%d is set\n",fds[i]);
-                
-                if ( read_from_fd(fds[i],buf,mr) == 0) {
-
-                    t = fds[--fds_num];
-                    fds[fds_num] = fds[i];
-                    fds[i] = t;
-                    i--;
-                }
-                buf[0] = '\0';
-            } else {
-                FD_SET(fds[i],&read_set);
-            }
-
-        res = select(max_fds,&read_set,NULL,NULL,&tv);
-        if (res == -1) {
-            perror("select");
-            exit(-1);
-        }
-    }
-    */
+   
+    for(i = 0;i < fds_num;i++)
+        free(buf[i]);
     free(buf);
+    free(my_pfds);
     free(fds);
     free(args);
     pthread_exit(NULL);
